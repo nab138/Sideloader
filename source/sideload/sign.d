@@ -33,6 +33,7 @@ Tuple!(PlistDict, PlistDict) sign(
     CertificateIdentity identity,
     ProvisioningProfile[string] provisioningProfiles,
     void delegate(double progress) addProgress,
+    bool isMultithreaded = true,
     string teamId = null,
     MDxHashFunction sha1Hasher = null,
     MDxHashFunction sha2Hasher = null,
@@ -40,7 +41,8 @@ Tuple!(PlistDict, PlistDict) sign(
     auto log = getLogger();
 
     auto bundleFolder = bundle.bundleDir;
-    auto fairPlayFolder = bundleFolder.buildPath("SC_Info");
+    enum fairPlayDir = "SC_Info";
+    auto fairPlayFolder = bundleFolder.buildPath(fairPlayDir);
     if (file.exists(fairPlayFolder)) {
         file.rmdirRecurse(fairPlayFolder);
     }
@@ -83,12 +85,13 @@ Tuple!(PlistDict, PlistDict) sign(
     size_t stepCount = subBundles.length + 2;
     const double stepSize = 1.0 / stepCount;
 
-    auto subBundlesTask = task({
-        foreach (subBundle; parallel(subBundles)) {
+    void signSubBundles() {
+        foreach (subBundle; maybeParallel(subBundles, isMultithreaded)) {
             auto bundleFiles = subBundle.sign(
                 identity,
                 provisioningProfiles,
-                (double progress) => addProgress(progress * stepSize),
+                    (double progress) => addProgress(progress * stepSize),
+                isMultithreaded,
                 teamId,
                 sha1HasherParallel.get(),
                 sha2HasherParallel.get()
@@ -127,7 +130,7 @@ Tuple!(PlistDict, PlistDict) sign(
                 scope MmFile memoryFile = new MmFile(subBundle.bundleDir.buildPath(subRelativePath));
                 ubyte[] fileData = cast(ubyte[]) memoryFile[];
 
-                foreach (hashCouple; parallel(hashPairs)) {
+                foreach (hashCouple; maybeParallel(hashPairs, isMultithreaded)) {
                     auto localHasher = hashCouple[0];
                     auto sha = hashCouple[1];
                     sha[] = localHasher.process(fileData)[];
@@ -144,8 +147,13 @@ Tuple!(PlistDict, PlistDict) sign(
             addFile("_CodeSignature".buildPath("CodeResources"));
             addFile(subBundle.appInfo["CFBundleExecutable"].str().native());
         }
-    });
-    subBundlesTask.executeInNewThread();
+    }
+
+    typeof(task(&signSubBundles)) subBundlesTask;
+    if (isMultithreaded) {
+        subBundlesTask = task(&signSubBundles);
+        subBundlesTask.executeInNewThread();
+    }
 
     log.debugF!"Signing bundle %s..."(baseName(bundleFolder));
 
@@ -171,7 +179,7 @@ Tuple!(PlistDict, PlistDict) sign(
 
     // TODO re-use the original CodeResources if it already existed.
     if (bundleFolder[$ - 1] == '/' || bundleFolder[$ - 1] == '\\') bundleFolder.length -= 1;
-    foreach(idx, absolutePath; parallel(bundleFiles)) {
+    foreach(idx, absolutePath; maybeParallel(bundleFiles, isMultithreaded)) {
         // scope(exit) addProgress(fileStepSize);
 
         string basename = baseName(absolutePath);
@@ -189,6 +197,8 @@ Tuple!(PlistDict, PlistDict) sign(
             || (relativePath.startsWith(frameworksDir) && relativePath[frameworksDir.length..$].toForwardSlashes().canFind('/'))
             // if it's a file from a plugins folder, skip it as it is processed by some other thread.
             || (relativePath.startsWith(plugInsDir) && relativePath[plugInsDir.length..$].toForwardSlashes().canFind('/'))
+            // if it's a fairplay file, it should not exist anymore anyway.
+            || (relativePath.startsWith(fairPlayDir))
         ) {
             continue;
         }
@@ -205,13 +215,13 @@ Tuple!(PlistDict, PlistDict) sign(
             scope MmFile memoryFile = new MmFile(absolutePath);
             ubyte[] fileData = cast(ubyte[]) memoryFile[];
 
-            foreach (hashCouple; parallel(hashPairs)) {
+            foreach (hashCouple; maybeParallel(hashPairs, isMultithreaded)) {
                 auto localHasher = hashCouple[0];
                 auto sha = hashCouple[1];
                 sha[] = localHasher.process(fileData)[];
             }
         } else {
-            foreach (hashCouple; parallel(hashPairs)) {
+            foreach (hashCouple; maybeParallel(hashPairs, isMultithreaded)) {
                 auto localHasher = hashCouple[0];
                 auto sha = hashCouple[1];
                 sha[] = localHasher.process(cast(ubyte[]) [])[];
@@ -242,7 +252,9 @@ Tuple!(PlistDict, PlistDict) sign(
     // too lazy yet to add better progress tracking
     addProgress(stepSize);
 
-    subBundlesTask.yieldForce();
+    if (isMultithreaded) {
+        subBundlesTask.yieldForce();
+    }
 
     log.debug_("Making CodeResources...");
     string codeResources = dict(
@@ -264,7 +276,7 @@ Tuple!(PlistDict, PlistDict) sign(
 
     double machOStepSize = stepSize / fatMachOs.length;
 
-    foreach (idx, fatMachOPair; parallel(fatMachOs)) {
+    foreach (idx, fatMachOPair; maybeParallel(fatMachOs, isMultithreaded)) {
         scope(exit) addProgress(machOStepSize);
         auto path = fatMachOPair.path;
         auto fatMachO = fatMachOPair.machO;

@@ -28,6 +28,9 @@ struct SignCommand
     @(NamedArgument("m", "provision").Description("App's provisioning certificate.").Required())
     string mobileProvisionPath;
 
+    @(NamedArgument("singlethread").Description("Run the signature process on a single thread. Sacrifices speed for more consistency."))
+    bool singlethreaded;
+
     @(PositionalArgument(0, "app path").Description("App path."))
     string appFolder;
 
@@ -54,13 +57,39 @@ struct SignCommand
         sideloadSign(
             app,
             new CertificateIdentity(certificate, privateKey),
-                [app.bundleIdentifier(): ProvisioningProfile("", "", mobileProvisionFile)], // TODO make a better ctor
-                (p) {
+            [app.bundleIdentifier(): ProvisioningProfile("", "", mobileProvisionFile)], // TODO make a better ctor
+            (p) {
                 progressBar.index = cast(int) (progress += p * 100);
                 progressBar.update();
-            }
+            },
+            !singlethreaded
         );
         progressBar.finish();
+
+        return 0;
+    }
+}
+
+@(Command("trollsign").Description("Bypass Core-Trust with TrollStore 2's method (CVE-2023-41991)."))
+struct TrollsignCommand
+{
+    @(PositionalArgument(0, "macho").Description("Mach-O executable path."))
+    string executablePath;
+
+    int opCall()
+    {
+        auto log = getLogger();
+        log.infoF!"Trollsigning %s"(executablePath);
+
+        import file = std.file;
+        import sideload.ct_bypass;
+        import sideload.macho;
+        MachO[] machOs = MachO.parse(cast(ubyte[]) file.read(executablePath));
+        foreach (ref machO; machOs) {
+            machO.bypassCoreTrust();
+        }
+        file.write(executablePath, makeMachO(machOs));
+        log.info("Done.");
 
         return 0;
     }

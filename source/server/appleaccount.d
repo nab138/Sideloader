@@ -97,11 +97,11 @@ package class AppleAccount {
         auto log = getLogger();
         return login(applicationInformation, device, adi, appleId, password, (string identityToken, string[string] urls, string urlBagKey, bool canIgnore) {
             if (urlBagKey == "repair") {
-                log.info("Apple tells us that your account is broken. We don't care.");
+                log.info("Apple tells us that your account is broken. We don't care (they actually just want you to add 2FA).");
                 return AppleSecondaryActionResponse(Success());
             }
 
-            if (urlBagKey != "trustedDeviceSecondaryAuth") {
+            if (urlBagKey != "trustedDeviceSecondaryAuth" && urlBagKey != "secondaryAuth") {
                 string error = format!`Unsupported next authentication step: "%s"`(urlBagKey);
                 if (!canIgnore) {
                     log.error(error);
@@ -135,29 +135,61 @@ package class AppleAccount {
 
                 "User-Agent": applicationInformation.applicationName
             ]);
+            request.addHeaders(applicationInformation.headers);
 
             // sends code to the trusted devices
-            bool delegate() sendCode = () {
-                auto res = request.get(urls["trustedDeviceSecondaryAuth"]);
-                return res.code == 200;
-            };
+            bool delegate() sendCode;
+            if (urlBagKey == "trustedDeviceSecondaryAuth") {
+                sendCode = () {
+                    auto res = request.get(urls["trustedDeviceSecondaryAuth"]);
+                    return res.code == 200;
+                };
+            } else {
+                sendCode = () {
+                    // urls["trustedDeviceSecondaryAuth"] to select the right phone number.
+                    auto res = request.get(urls["secondaryAuth"]);
+                    // auto res = request.put("https://gsa.apple.com/auth/verify/phone/", `{"phoneNumber": {"id": 1}, "mode": "sms"}`);
+                    log.infoF!"Code sent: %s"(res.responseBody().data!string());
+                    return res.code == 200;
+                };
+            }
 
             // submits the given code to Apple servers
             AppleSecondaryActionResponse response = AppleSecondaryActionResponse(AppleLoginError(AppleLoginErrorCode.no2FAAttempt, "2FA has not been completed."));
-            AppleSecondaryActionResponse delegate(string) submitCode = (string code) {
-                request.headers["security-code"] = code;
-                auto codeValidationPlist = Plist.fromXml(request.get(urls["validateCode"]).responseBody().data!string()).dict();
-                log.traceF!"2FA response: %s"(codeValidationPlist.toXml());
-                auto resultCode = codeValidationPlist["ec"].uinteger().native();
+            AppleSecondaryActionResponse delegate(string) submitCode;
+            if (urlBagKey == "trustedDeviceSecondaryAuth") {
+                submitCode = (string code) {
+                    request.headers["security-code"] = code;
+                    auto codeValidationPlist = Plist.fromXml(request.get(urls["validateCode"]).responseBody().data!string()).dict();
+                    log.traceF!"Trusted device 2FA response: %s"(codeValidationPlist.toXml());
+                    auto resultCode = codeValidationPlist["ec"].uinteger().native();
 
-                if (resultCode == 0) {
-                    response = AppleSecondaryActionResponse(ReloginNeeded());
-                } else {
-                    response = AppleSecondaryActionResponse(AppleLoginError(cast(AppleLoginErrorCode) resultCode, codeValidationPlist["em"].str().native()));
-                }
+                    if (resultCode == 0) {
+                        response = AppleSecondaryActionResponse(ReloginNeeded());
+                    } else {
+                        response = AppleSecondaryActionResponse(AppleLoginError(cast(AppleLoginErrorCode) resultCode, codeValidationPlist["em"].str().native()));
+                    }
 
-                return response;
-            };
+                    return response;
+                };
+            } else if (urlBagKey == "secondaryAuth") {
+                submitCode = (string code) {
+                    auto result = request.post("https://gsa.apple.com/auth/verify/phone/securitycode",
+                        format!`{"securityCode": {"code": "%s"}, "phoneNumber": {"id": 1}, "mode": "sms"}`(code),
+                        "application/json"
+                    );
+                    auto resultCode = result.code();
+                    log.traceF!"SMS 2FA response: %s"(resultCode);
+
+                    if (resultCode == 200) {
+                        response = AppleSecondaryActionResponse(ReloginNeeded());
+                    } else {
+                        response = AppleSecondaryActionResponse(AppleLoginError(cast(AppleLoginErrorCode) resultCode, result.responseBody().data!string()));
+                    }
+
+                    return response;
+                };
+            }
 
             tfaHandler(sendCode, submitCode);
             return response;
@@ -382,8 +414,8 @@ package class AppleAccount {
                 string identityToken = Base64.encode(cast(ubyte[]) (adsid ~ ":" ~ idmsToken));
                 return nextStepHandler(identityToken, urls, secondaryActionKey, canIgnore).match!(
                     (AppleLoginError error) => AppleLoginResponse(error),
-                    (ReloginNeeded _) => completeAuthentication(),
-                    (Success _) => login(applicationInformation, device, adi, appleId, password, nextStepHandler),
+                    (ReloginNeeded _) => login(applicationInformation, device, adi, appleId, password, nextStepHandler),
+                    (Success _) => completeAuthentication(),
                 );
             case 433: /+ anisetteReprovisionRequired +/
                 log.errorF!"Server requested Anisette reprovision that has not been implemented yet! Here is some debug info: %s"(response2Str);

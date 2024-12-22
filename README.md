@@ -33,21 +33,26 @@ I am here to help! I don't want this to finish unmaintained!
 
 ```sh
 $ sideloader -h
-Usage: sideloader [-d] [-h] <command> [<args>]
+Usage: sideloader [-d] [--thread-count THREADCOUNT] [-h] <command> [<args>]
 
 Available commands:
   app-id         Manage App IDs.
   cert           Manage certificates.
+  device         Manage registered devices.
   install        Install an application on the device (renames the app, register
                  the identifier, sign and install automatically).
   sign           Sign an application bundle.
+  trollsign      Bypass Core-Trust with TrollStore 2's method (CVE-2023-41991).
   team           Manage teams.
   tool           Run Sideloader's tools.
   version        Print the version.
 
 Optional arguments:
   -d, --debug    Enable debug logging
-  -h, --help     Show this help message and exit                                                                                                                                                                       
+  --thread-count THREADCOUNT
+                 Numbers of threads to be used for signing the application
+                 bundle
+  -h, --help     Show this help message and exit                                                                                                                                                                      
 ```
 
 Additionally, AppleID user and password can be set via the environment variables `APPLE_ID_USER` and `APPLE_ID_PWD`.
@@ -56,6 +61,7 @@ Table of Contents
 =================
 
   * [How to install](#how-to-install)
+  * [How to use the CLI to install](#how-to-use-the-CLI-to-install)
   * [How do I build it myself?](#how-do-i-build-it-myself)
     * [OpenSUSE Tumbleweed](#opensuse-tumbleweed)
     * [Other distributions](#other-distributions)
@@ -89,6 +95,21 @@ already have those installed. Put them then in the same folder as Sideloader and
 run it. (For libimobiledevice and libplist, take a look at libimobiledevice-win32, and for OpenSSL
 see [this link](https://slproweb.com/products/Win32OpenSSL.html))
 
+## How to use the CLI to install
+
+1. Go to https://sidestore.io/ on your computer and download the SideStore.ipa file.
+2. Download the most recent version of Sideloader from https://github.com/Dadoum/Sideloader/actions.
+3. Use the following command to sideload the SideStore.ipa file (if there are errors, try running the command again):
+	`sideloader install SideStore.ipa -i`
+4. Enable Developer Mode on your iPhone if it's not already enabled.
+5. Use the following command to generate the pairing file and send it to your phone:
+	`sideloader tool run 0`
+6. Download and install the Wireguard VPN app from the iOS App Store.
+7. Visit https://sidestore.io/ on your phone and download the Wireguard Config file, then share it to the Wireguard app.
+8. Enable the Wireguard VPN on your phone.
+9. Open the SideStore app and sign in with the same Apple ID that you used to install SideStore in step 3.
+10. Go to the Apps tab and refresh the SideStore app by tapping on the green day counter or selecting Refresh All. You must do this whenever you install SideStore, otherwise you may encounter errors like SideStore expiring earlier than it should.
+
 ## How do I build it myself?
 
 ### OpenSUSE Tumbleweed:
@@ -111,8 +132,9 @@ see [this link](https://slproweb.com/products/Win32OpenSSL.html))
 ### Other distributions:
 
 Get a recent version `ldc2` or `dmd` installed (an installation script is available on 
-[dlang.org](https://dlang.org/)). GNU D compiler won't compile that code (the cryptography
-libraries uses SIMD instructions that it can't compile yet).
+[dlang.org](https://dlang.org/)). It is tested with D 2.104.2 (= LDC 1.34) but it will probably compile with
+older compilers. GNU D compiler won't compile that code though (the cryptography library makes 
+use of SIMD instructions that cannot be compiled by GDC yet).
 
 ## How it works?
 
