@@ -1,6 +1,6 @@
-name: CLI builds
+name: GTK builds
 
-on: workflow_dispatch
+on: push
 
 env:
   BUILD_TYPE: Release
@@ -11,22 +11,23 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - triple: "x86_64-linux-gnu"
-            target: "linux"
+          - triple: 'x86_64-linux-gnu'
+            target: 'linux'
 
-          - triple: "aarch64-linux-gnu"
-            target: "linux"
+          - triple: 'aarch64-linux-gnu'
+            target: 'linux'
 
-          - triple: "x86_64-windows-msvc"
-            target: "windows"
+        # Doesn't work, gtk_d doesn't support those platforms.
+        # - triple: 'x86_64-windows-msvc'
+        #   target: 'windows'
 
-          - triple: "x86_64-apple-darwin"
-            target: "macos"
+        # - triple: 'x86_64-apple-darwin'
+        #   target: 'macos'
 
-          - triple: "arm64-apple-macos"
-            target: "macos"
+        # - triple: 'arm64-apple-macos'
+        #   target: 'macos'
 
-    name: Build CLI for ${{ matrix.triple }}
+    name: Build GTK for ${{ matrix.triple }}
 
     runs-on: ubuntu-22.04
     steps:
@@ -46,15 +47,15 @@ jobs:
         uses: ./.github/actions/write-version-file
 
       - name: Build
-        run: dub build -b release-debug --compiler=ldc2 --arch ${{ matrix.triple }} :cli-frontend
+        run: dub build -b release-debug --compiler=ldc2 --arch ${{ matrix.triple }} :gtk-frontend
 
       - name: Move files around for artifcation
         uses: ./.github/actions/rename-files
         with:
-          build-tag: cli-${{ matrix.triple }}
+          build-tag: gtk-${{ matrix.triple }}
 
       - uses: actions/upload-artifact@v4
         with:
-          name: sideloader-cli-${{ matrix.triple }}
+          name: sideloader-gtk-${{ matrix.triple }}
           path: |
             ${{github.workspace}}/bin/*
